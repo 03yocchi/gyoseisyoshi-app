@@ -397,12 +397,12 @@
     <button class="home-card" id="homeGoPractice">
       <div class="home-card-icon">📝</div>
       <div class="home-card-title">問題演習する</div>
-      <div class="home-card-desc">サンプル問題と、自分で追加した問題を解く</div>
+      <div class="home-card-desc">サンプル問題と、みんなが追加した問題を解く</div>
     </button>
     <button class="home-card" id="homeGoAdd">
       <div class="home-card-icon">➕</div>
       <div class="home-card-title">問題を追加する</div>
-      <div class="home-card-desc">Excel/PDFの読み込みや、手入力で問題を追加</div>
+      <div class="home-card-desc">Excel/PDFの読み込みや、手入力で問題を追加（追加するとみんなが解けます）</div>
     </button>
     <button class="home-card" id="homeGoGenerated">
       <div class="home-card-icon">🤖</div>
@@ -516,7 +516,7 @@ service cloud.firestore {
         <div class="settings-status" id="cf-status"></div>
       </div>
       <div style="margin-top:16px;border-top:1px dashed var(--line);padding-top:12px;">
-        <label style="margin-top:0;">保存済みの自分の問題</label>
+        <label style="margin-top:0;">登録済みの問題（みんなに共有されます）</label>
         <div class="list-toolbar"><button class="clear-all-link" id="customClearAll">この一覧を全て削除</button></div>
         <ul class="qlist" id="customQList"></ul>
       </div>
@@ -737,6 +737,8 @@ const SAMPLE_QUESTIONS = [
 const GLOBAL_SETTINGS_KEY = 'global_settings';
 const PROFILES_LIST_KEY = 'profiles_list';
 const LAST_PROFILE_KEY = 'last_profile';
+const SHARED_CUSTOM_KEY = 'shared_custom_questions';
+const SHARED_GENERATED_KEY = 'shared_generated_questions';
 
 let state = {
   customQuestions: [],
@@ -818,6 +820,28 @@ async function setLastProfile(name){
   try{ await window.storage.set(LAST_PROFILE_KEY, name, false); }catch(e){}
 }
 
+/* ---- Shared question banks (visible to everyone using this app) ---- */
+async function loadSharedQuestions(){
+  try{
+    const res = await window.storage.get(SHARED_CUSTOM_KEY, true);
+    state.customQuestions = (res && res.value) ? JSON.parse(res.value) : [];
+  }catch(e){ state.customQuestions = []; }
+  try{
+    const res2 = await window.storage.get(SHARED_GENERATED_KEY, true);
+    state.generatedQuestions = (res2 && res2.value) ? JSON.parse(res2.value) : [];
+  }catch(e){ state.generatedQuestions = []; }
+}
+async function saveSharedCustomQuestions(){
+  try{
+    await window.storage.set(SHARED_CUSTOM_KEY, JSON.stringify(state.customQuestions), true);
+  }catch(e){ console.error('共有問題の保存に失敗しました', e); }
+}
+async function saveSharedGeneratedQuestions(){
+  try{
+    await window.storage.set(SHARED_GENERATED_KEY, JSON.stringify(state.generatedQuestions), true);
+  }catch(e){ console.error('共有類題の保存に失敗しました', e); }
+}
+
 /* ---- Password hashing ---- */
 async function hashPassword(pw){
   try{
@@ -832,7 +856,7 @@ async function hashPassword(pw){
   return 'fallback_' + h.toString(16);
 }
 
-/* ---- Per-profile study data ---- */
+/* ---- Per-profile data: now just progress + password (questions are shared, see above) ---- */
 async function loadProfileDataRaw(name){
   try{
     const res = await window.storage.get(slugifyProfileName(name), false);
@@ -844,8 +868,6 @@ async function saveStorage(){
   if(!state.profileName) return;
   try{
     await window.storage.set(slugifyProfileName(state.profileName), JSON.stringify({
-      customQuestions: state.customQuestions,
-      generatedQuestions: state.generatedQuestions,
       progress: state.progress,
       passwordHash: state.profilePasswordHash || null
     }), false);
@@ -861,8 +883,6 @@ async function attemptLogin(name, password){
   const data = await loadProfileDataRaw(name);
   const enteredHash = await hashPassword(password);
 
-  state.customQuestions = [];
-  state.generatedQuestions = [];
   state.progress = {};
 
   if(data){
@@ -871,8 +891,6 @@ async function attemptLogin(name, password){
     }
     // existing profile (or a legacy one saved before passwords existed —
     // adopt the entered password as its password going forward)
-    state.customQuestions = data.customQuestions || [];
-    state.generatedQuestions = data.generatedQuestions || [];
     state.progress = data.progress || {};
     state.profilePasswordHash = data.passwordHash || enteredHash;
   }else{
@@ -887,6 +905,7 @@ async function attemptLogin(name, password){
   state.profileName = name;
   await setLastProfile(name);
   await saveStorage(); // persist (writes the password hash for new/legacy profiles)
+  await loadSharedQuestions(); // pick up whatever custom/generated questions the group has added
   return {ok:true};
 }
 
@@ -1091,7 +1110,7 @@ function renderList(){
     listWrap.style.display='none';
     formWrap.style.display='block';
     renderClearAllControl('customClearAll', state.customQuestions.length>0, ()=>clearAllQuestions('custom'));
-    renderQuestionListInto('customQList', state.customQuestions, '自分で追加した問題はまだありません。上のフォームから登録してください。');
+    renderQuestionListInto('customQList', state.customQuestions, 'まだ追加された問題はありません。上のフォームから登録してください（登録するとみんなが解けるようになります）。');
     return;
   }
   listWrap.style.display='block';
@@ -1121,7 +1140,7 @@ function renderClearAllControl(elId, show, onClick){
       return;
     }
     confirming = true;
-    el.textContent = '本当に全て削除しますか？（もう一度クリック）';
+    el.textContent = 'みんなの問題です。本当に全て削除しますか？（もう一度クリック）';
     revertTimer = setTimeout(()=>{
       confirming = false;
       el.textContent = 'この一覧を全て削除';
@@ -1130,11 +1149,12 @@ function renderClearAllControl(elId, show, onClick){
 }
 
 function deleteQuestion(id){
-  const beforeC = state.customQuestions.length;
   state.customQuestions = state.customQuestions.filter(q=>q.id!==id);
   state.generatedQuestions = state.generatedQuestions.filter(q=>q.id!==id);
   delete state.progress[id];
   if(state.currentId === id){ state.currentId = null; state.chatHistory = []; }
+  saveSharedCustomQuestions();
+  saveSharedGeneratedQuestions();
   saveStorage();
   renderList();
   renderStats();
@@ -1146,10 +1166,12 @@ function clearAllQuestions(which){
     state.customQuestions.forEach(q=>delete state.progress[q.id]);
     if(state.currentId && state.customQuestions.some(q=>q.id===state.currentId)) state.currentId=null;
     state.customQuestions = [];
+    saveSharedCustomQuestions();
   }else{
     state.generatedQuestions.forEach(q=>delete state.progress[q.id]);
     if(state.currentId && state.generatedQuestions.some(q=>q.id===state.currentId)) state.currentId=null;
     state.generatedQuestions = [];
+    saveSharedGeneratedQuestions();
   }
   saveStorage();
   renderList();
@@ -1190,7 +1212,7 @@ function renderQuestionListInto(elId, source, emptyMsg){
     if(q.origin==='custom' || q.origin==='generated'){
       const delBtn = document.createElement('button');
       delBtn.className='qdelete-btn';
-      delBtn.title='この問題を削除';
+      delBtn.title='この問題を削除（みんなから見えなくなります）';
       delBtn.textContent='×';
       let confirming = false;
       let revertTimer = null;
@@ -1523,7 +1545,7 @@ async function runSimilar(q){
       origin: 'generated'
     };
     state.generatedQuestions.push(newQ);
-    saveStorage();
+    saveSharedGeneratedQuestions();
     block.innerHTML = '<h3>類題（AI生成） <span class="model-tag">'+currentProviderLabel()+'</span></h3><div class="ai-output">'+escapeHtml(parsed.text)+'\n\n'+
       parsed.choices.map((c,i)=>(['①','②','③','④','⑤'][i])+' '+c).join('\n')+
       (parsed.explanation ? ('\n\n解説: '+parsed.explanation) : '')+
@@ -1609,8 +1631,7 @@ function initCustomForm(){
     const noVal = document.getElementById('cf-no').value.trim() || null;
     const newQ = {id: uid('cus'), subject, type, text, choices, correct, no: noVal, examLabel: yearVal, origin:'custom'};
     state.customQuestions.push(newQ);
-    saveStorage();
-    // reset form
+    saveSharedCustomQuestions();
     document.getElementById('cf-text').value='';
     document.querySelectorAll('.cf-choice').forEach(i=>i.value='');
     document.getElementById('cf-correct').value='';
@@ -2092,11 +2113,11 @@ function initSettingsPanel(){
       return;
     }
     state.customQuestions = state.customQuestions.concat(imported);
-    saveStorage();
+    saveSharedCustomQuestions();
     renderList();
     document.getElementById('importInput').value='';
     status.className='settings-status ok';
-    status.textContent = imported.length + '件を「自分で追加」に取り込みました。' + (skipped ? (skipped+'件は形式不正のためスキップしました。'):'');
+    status.textContent = imported.length + '件をみんなの問題として取り込みました。' + (skipped ? (skipped+'件は形式不正のためスキップしました。'):'');
   };
 }
 
