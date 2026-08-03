@@ -115,6 +115,15 @@
   }
   .queue-bar .queue-label{font-family:'JetBrains Mono',monospace;color:var(--brass);}
   .queue-bar .btn{padding:5px 12px;font-size:12px;}
+
+  .sync-toast{
+    position:fixed;top:16px;left:50%;transform:translateX(-50%);
+    background:var(--hanko-dark);color:#fff;padding:10px 18px;border-radius:8px;
+    font-size:13px;max-width:90vw;z-index:200;box-shadow:0 6px 18px rgba(0,0,0,.25);
+    display:flex;align-items:center;gap:12px;
+  }
+  .sync-toast button{background:transparent;border:none;color:#fff;opacity:.8;cursor:pointer;font-size:15px;}
+  .sync-toast button:hover{opacity:1;}
   .tabbar{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;}
   .tabbtn{
     flex:1;min-width:80px;
@@ -440,7 +449,11 @@
       <div class="settings-block" id="cloudSyncBlock" style="display:none;">
         <h4 style="margin-bottom:6px;">☁ クラウド同期（複数端末で進捗を共有）</h4>
         <div class="settings-note">
-          無料のFirebaseプロジェクトを1つ作り、その「設定情報（config）」をここに貼り付けると、名前でログインした問題演習の進捗・追加した問題が、どの端末からでも同期されるようになります。
+          このサイトにはあらかじめクラウド同期の設定が組み込まれているので、<b>名前とパスワードでログインするだけで自動的に同期されます</b>。特に何もする必要はありません。
+          <br><br>
+          もし<b>別のFirebaseプロジェクトに変更したい</b>場合は、以下の欄に別の設定情報（config）を貼り付けて「クラウド同期に接続する」を押してください（この端末だけ、組み込み設定より優先されます）。
+          <br><br>
+          （参考：新しくFirebaseプロジェクトを作る場合の手順）
           <br>①<a href="https://console.firebase.google.com/" target="_blank" rel="noopener">Firebaseコンソール</a>でプロジェクトを新規作成
           　②「Firestore Database」を作成（本番モードでOK）
           　③「Authentication」→「Sign-in method」で「匿名」を有効化
@@ -595,6 +608,20 @@ subject,type,text,choice1,choice2,choice3,choice4,choice5,correct'></textarea>
    across devices. Keys in ALWAYS_LOCAL_KEYS (device-specific things like the
    AI provider/API key) never go to the cloud. */
 const IS_CLAUDE_ENV = !!window.storage;
+
+/* Pre-configured Firebase project for this deployment, so friends don't need
+   to paste any config themselves — just log in with a name and password.
+   (Firebase web configs are meant to be public; real protection comes from
+   the Firestore security rules, not from hiding this object.) */
+const EMBEDDED_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCd86wK4K6BVeq0ofFdr86OIo5R_tAM35s",
+  authDomain: "gyouseisyoshi-study-site.firebaseapp.com",
+  projectId: "gyouseisyoshi-study-site",
+  storageBucket: "gyouseisyoshi-study-site.firebasestorage.app",
+  messagingSenderId: "947420405690",
+  appId: "1:947420405690:web:bdf969502726ff2c690783",
+  measurementId: "G-G6LF62V3YE"
+};
 const ALWAYS_LOCAL_KEYS = ['global_settings', 'last_profile', 'firebase_config'];
 let cloudDb = null;
 let cloudReady = false;
@@ -652,6 +679,21 @@ if(!window.storage){
 }
 
 const SUBJECTS = ["憲法","民法","行政法","商法・会社法","基礎法学","一般知識"];
+
+function showSyncWarning(message){
+  const old = document.getElementById('syncToast');
+  if(old) old.remove();
+  const toast = document.createElement('div');
+  toast.className = 'sync-toast';
+  toast.id = 'syncToast';
+  toast.innerHTML = '<span>⚠ ' + message.replace(/</g,'&lt;') + '</span>';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '×';
+  closeBtn.onclick = ()=>toast.remove();
+  toast.appendChild(closeBtn);
+  document.body.appendChild(toast);
+  setTimeout(()=>{ if(toast.parentNode) toast.remove(); }, 8000);
+}
 
 const SAMPLE_QUESTIONS = [
   {id:'smp-c1', subject:'憲法', type:'choice',
@@ -821,25 +863,45 @@ async function setLastProfile(name){
 }
 
 /* ---- Shared question banks (visible to everyone using this app) ---- */
+function isNotFoundError(e){
+  return e && typeof e.message === 'string' && e.message.indexOf('key not found') !== -1;
+}
+
 async function loadSharedQuestions(){
   try{
     const res = await window.storage.get(SHARED_CUSTOM_KEY, true);
     state.customQuestions = (res && res.value) ? JSON.parse(res.value) : [];
-  }catch(e){ state.customQuestions = []; }
+  }catch(e){
+    state.customQuestions = [];
+    if(!isNotFoundError(e)){
+      showSyncWarning('みんなの問題の読み込みに失敗しました。クラウド同期の設定を確認してください。（' + (e.message||e) + '）');
+    }
+  }
   try{
     const res2 = await window.storage.get(SHARED_GENERATED_KEY, true);
     state.generatedQuestions = (res2 && res2.value) ? JSON.parse(res2.value) : [];
-  }catch(e){ state.generatedQuestions = []; }
+  }catch(e){
+    state.generatedQuestions = [];
+    if(!isNotFoundError(e)){
+      showSyncWarning('みんなの類題の読み込みに失敗しました。クラウド同期の設定を確認してください。（' + (e.message||e) + '）');
+    }
+  }
 }
 async function saveSharedCustomQuestions(){
   try{
     await window.storage.set(SHARED_CUSTOM_KEY, JSON.stringify(state.customQuestions), true);
-  }catch(e){ console.error('共有問題の保存に失敗しました', e); }
+  }catch(e){
+    console.error('共有問題の保存に失敗しました', e);
+    showSyncWarning('問題の保存に失敗しました。クラウド同期の設定を確認してください。（' + (e.message||e) + '）');
+  }
 }
 async function saveSharedGeneratedQuestions(){
   try{
     await window.storage.set(SHARED_GENERATED_KEY, JSON.stringify(state.generatedQuestions), true);
-  }catch(e){ console.error('共有類題の保存に失敗しました', e); }
+  }catch(e){
+    console.error('共有類題の保存に失敗しました', e);
+    showSyncWarning('類題の保存に失敗しました。クラウド同期の設定を確認してください。（' + (e.message||e) + '）');
+  }
 }
 
 /* ---- Password hashing ---- */
@@ -918,6 +980,9 @@ function enterApp(name){
   state.currentId = null;
   state.chatHistory = [];
   renderStats();
+  if(!IS_CLAUDE_ENV && !cloudReady){
+    showSyncWarning('クラウド同期が未接続です。今のままだと、追加した問題や進捗はこの端末にしか保存されません。「⚙設定・データ」からクラウド同期を設定できます。');
+  }
 }
 
 async function renderProfilePicker(){
@@ -1999,12 +2064,12 @@ function initSettingsPanel(){
     const cloudStatus = document.getElementById('cloudSyncStatus');
 
     const savedConfig = localStorage.getItem('gsd_firebase_config');
-    if(savedConfig){
-      document.getElementById('firebaseConfigInput').value = savedConfig;
-      if(cloudReady){
-        cloudStatus.className='settings-status ok';
-        cloudStatus.textContent='クラウド同期に接続済みです。';
-      }
+    document.getElementById('firebaseConfigInput').value = savedConfig || JSON.stringify(EMBEDDED_FIREBASE_CONFIG, null, 2);
+    if(cloudReady){
+      cloudStatus.className='settings-status ok';
+      cloudStatus.textContent = savedConfig
+        ? 'クラウド同期に接続済みです（あなたが設定した内容）。'
+        : 'クラウド同期に接続済みです（このサイトに組み込まれた設定を自動的に使っています。何もしなくてOKです）。';
     }
 
     document.getElementById('connectCloudBtn').onclick = async ()=>{
@@ -2186,9 +2251,13 @@ function initNav(){
 async function init(){
   if(!IS_CLAUDE_ENV){
     const savedConfig = localStorage.getItem('gsd_firebase_config');
-    if(savedConfig){
-      try{ await connectCloud(JSON.parse(savedConfig)); }
-      catch(e){ console.error('クラウド同期への自動接続に失敗しました', e); }
+    const configToUse = savedConfig ? JSON.parse(savedConfig) : EMBEDDED_FIREBASE_CONFIG;
+    if(configToUse){
+      try{ await connectCloud(configToUse); }
+      catch(e){
+        console.error('クラウド同期への自動接続に失敗しました', e);
+        showSyncWarning('クラウド同期への接続に失敗しました。設定・データ画面でFirebaseの設定を確認してください。（' + (e.message||e) + '）');
+      }
     }
   }
   await loadGlobalSettings();
