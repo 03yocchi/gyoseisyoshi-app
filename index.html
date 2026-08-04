@@ -1017,6 +1017,12 @@ function initProfilePicker(){
     if(!name){ status.className='settings-status err'; status.textContent='名前を入力してください。'; return; }
     if(!password){ status.className='settings-status err'; status.textContent='パスワードを入力してください。'; return; }
     status.className='settings-status'; status.textContent='確認中…';
+    if(!IS_CLAUDE_ENV && cloudConnectPromise && !cloudReady){
+      status.textContent = 'クラウド同期を確認中…';
+      try{ await withTimeout(cloudConnectPromise, 4000, 'クラウド同期の確認'); }
+      catch(e){ /* proceed anyway — attemptLogin below will just use local storage */ }
+      status.textContent = '確認中…';
+    }
     const result = await attemptLogin(name, password);
     if(!result.ok){
       status.className='settings-status err';
@@ -2248,24 +2254,36 @@ function initNav(){
 }
 
 /* ---------- Init ---------- */
+function withTimeout(promise, ms, label){
+  return Promise.race([
+    promise,
+    new Promise((_, reject)=>setTimeout(()=>reject(new Error(label+'がタイムアウトしました（'+(ms/1000)+'秒）')), ms))
+  ]);
+}
+
+let cloudConnectPromise = null;
+
+function connectCloudInBackground(){
+  if(IS_CLAUDE_ENV) return;
+  const savedConfig = localStorage.getItem('gsd_firebase_config');
+  const configToUse = savedConfig ? JSON.parse(savedConfig) : EMBEDDED_FIREBASE_CONFIG;
+  if(!configToUse) return;
+  cloudConnectPromise = withTimeout(connectCloud(configToUse), 8000, 'クラウド同期への接続');
+  cloudConnectPromise
+    .then(()=>{
+      const note = document.getElementById('storageScopeNote');
+      if(note) note.textContent = '※クラウド同期が有効です。名前でログインした進捗・追加問題は、どの端末からでも同じデータが使われます。';
+    })
+    .catch(e=>{
+      console.error('クラウド同期への自動接続に失敗しました', e);
+      showSyncWarning('クラウド同期への接続に失敗しました。ローカル保存のみで続行します。（' + (e.message||e) + '）');
+    });
+}
+
 async function init(){
-  if(!IS_CLAUDE_ENV){
-    const savedConfig = localStorage.getItem('gsd_firebase_config');
-    const configToUse = savedConfig ? JSON.parse(savedConfig) : EMBEDDED_FIREBASE_CONFIG;
-    if(configToUse){
-      try{ await connectCloud(configToUse); }
-      catch(e){
-        console.error('クラウド同期への自動接続に失敗しました', e);
-        showSyncWarning('クラウド同期への接続に失敗しました。設定・データ画面でFirebaseの設定を確認してください。（' + (e.message||e) + '）');
-      }
-    }
-  }
+  // Wire up and show the UI first — never let a slow/stuck network call
+  // (like connecting to Firebase) block the login screen from working.
   await loadGlobalSettings();
-  document.getElementById('storageScopeNote').textContent = IS_CLAUDE_ENV
-    ? '※保存データはあなたのClaudeアカウントに保存され、別の端末でも引き継がれます。'
-    : (cloudReady
-        ? '※クラウド同期が有効です。名前でログインした進捗・追加問題は、どの端末からでも同じデータが使われます。'
-        : '※このファイルはClaude.ai以外の場所で開かれています。保存データは「この端末のこのブラウザ」にのみ保存され、他の端末とは同期されません。ブラウザのデータを消去すると失われます。設定・データ画面からクラウド同期を設定できます。');
   initNav();
   initPracticeToolbar();
   initCustomForm();
@@ -2275,11 +2293,17 @@ async function init(){
   initProfilePicker();
   renderChips();
 
+  document.getElementById('storageScopeNote').textContent = IS_CLAUDE_ENV
+    ? '※保存データはあなたのClaudeアカウントに保存され、別の端末でも引き継がれます。'
+    : '※クラウド同期に接続中です…（この端末のみのローカル保存で先に始めることもできます）';
+
   await renderProfilePicker();
   const last = await getLastProfile();
   if(last){
     document.getElementById('loginNameInput').value = last;
   }
+
+  connectCloudInBackground(); // fire-and-forget, never blocks the UI above
 }
 init();
 
