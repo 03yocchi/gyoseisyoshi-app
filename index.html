@@ -11,6 +11,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.5/purify.min.js"></script>
 <style>
   :root{
     --ink:#211E19;
@@ -244,8 +246,37 @@
   }
   .ai-output{
     background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px 16px;
-    font-size:13.5px;white-space:pre-wrap;margin-bottom:14px;
+    font-size:13.5px;margin-bottom:14px;
   }
+  .ai-output > *:first-child{margin-top:0;}
+  .ai-output > *:last-child{margin-bottom:0;}
+  .md-body p{margin:0 0 10px;line-height:1.8;}
+  .md-body h1,.md-body h2,.md-body h3,.md-body h4{
+    font-family:'Shippori Mincho',serif;font-weight:600;line-height:1.5;
+    margin:16px 0 8px;color:var(--ink);
+  }
+  .md-body h1{font-size:17px;} .md-body h2{font-size:15.5px;} .md-body h3{font-size:14.5px;} .md-body h4{font-size:13.5px;}
+  .md-body ul,.md-body ol{margin:0 0 10px;padding-left:1.4em;line-height:1.8;}
+  .md-body li{margin-bottom:3px;}
+  .md-body li > ul, .md-body li > ol{margin-top:3px;margin-bottom:3px;}
+  .md-body strong{color:var(--hanko-dark);font-weight:700;}
+  .md-body em{color:var(--brass);font-style:italic;}
+  .md-body code{
+    background:var(--paper-deep);border-radius:4px;padding:1px 5px;
+    font-family:'JetBrains Mono',monospace;font-size:12px;
+  }
+  .md-body pre{
+    background:var(--paper-deep);border-radius:8px;padding:10px 12px;overflow-x:auto;margin:0 0 10px;
+  }
+  .md-body pre code{background:none;padding:0;}
+  .md-body blockquote{
+    border-left:3px solid var(--brass);margin:0 0 10px;padding:2px 12px;color:var(--muted);
+  }
+  .md-body a{color:var(--hanko);text-decoration:underline;}
+  .md-body hr{border:none;border-top:1px dashed var(--line);margin:14px 0;}
+  .md-body table{border-collapse:collapse;margin:0 0 10px;font-size:12.5px;}
+  .md-body th,.md-body td{border:1px solid var(--line);padding:5px 9px;}
+  .md-body th{background:var(--paper-deep);}
   .loading-text{font-size:13px;color:var(--muted);font-family:'JetBrains Mono',monospace;}
   .loading-text::after{content:'';display:inline-block;width:1em;text-align:left;animation:dots 1.2s steps(4) infinite;}
   @keyframes dots{0%{content:'';}25%{content:'.';}50%{content:'..';}75%{content:'...';}}
@@ -1320,6 +1351,15 @@ function examRefLabel(q){
   return null;
 }
 
+function renderMarkdown(text){
+  try{
+    const raw = marked.parse(String(text||''), {breaks:true});
+    return DOMPurify.sanitize(raw);
+  }catch(e){
+    return escapeHtml(text);
+  }
+}
+
 function escapeHtml(s){
   const d = document.createElement('div');
   d.textContent = s;
@@ -1576,11 +1616,11 @@ function appendAiBlock(title, id){
 
 async function runExplain(q){
   const block = appendAiBlock('AI解説 <span class="model-tag">'+currentProviderLabel()+'</span>', 'load-explain');
-  const system = 'あなたは行政書士試験対策に精通した専門講師です。受験生に向けて、正確かつ簡潔に解説します。断定できない場合は断定を避け、確認を促してください。';
+  const system = 'あなたは行政書士試験対策に精通した専門講師です。受験生に向けて、正確かつ簡潔に解説します。断定できない場合は断定を避け、確認を促してください。出力はMarkdown形式（見出しは##以下、重要語は**太字**、箇条書きは-）を使って読みやすく整形してください。';
   const prompt = questionContextText(q) + '\n\n上記の問題について、(1)結論(正解の要点)、(2)正解の根拠となる条文・判例・法理論、(3)誤りの選択肢がなぜ誤りか、を初学者にもわかる言葉で、350〜500字程度で解説してください。箇条書きでも構いません。';
   try{
     const text = await callAI(system, prompt);
-    block.innerHTML = '<h3>AI解説 <span class="model-tag">'+currentProviderLabel()+'</span></h3><div class="ai-output">'+escapeHtml(text)+'</div>';
+    block.innerHTML = '<h3>AI解説 <span class="model-tag">'+currentProviderLabel()+'</span></h3><div class="ai-output"><div class="md-body">'+renderMarkdown(text)+'</div></div>';
   }catch(e){
     block.innerHTML = '<h3>AI解説</h3><div class="error-box">解説を取得できませんでした。'+escapeHtml(e.message||'')+'</div>';
   }
@@ -1588,11 +1628,11 @@ async function runExplain(q){
 
 async function runRelated(q){
   const block = appendAiBlock('周辺知識まとめ <span class="model-tag">'+currentProviderLabel()+'</span>', 'load-related');
-  const system = 'あなたは行政書士試験対策に精通した専門講師です。受験生が周辺知識を補強できるよう、関連情報を整理して提示します。';
+  const system = 'あなたは行政書士試験対策に精通した専門講師です。受験生が周辺知識を補強できるよう、関連情報を整理して提示します。出力はMarkdown形式（見出しは##以下、重要語は**太字**、箇条書きは-）を使って読みやすく整形してください。';
   const prompt = questionContextText(q) + '\n\n上記の問題に関連する、(1)関連条文、(2)関連判例、(3)混同しやすい類似制度や紛らわしい論点、(4)覚えておくべき数字・要件、を箇条書きで整理してください。400字程度でコンパクトにまとめてください。';
   try{
     const text = await callAI(system, prompt);
-    block.innerHTML = '<h3>周辺知識まとめ <span class="model-tag">'+currentProviderLabel()+'</span></h3><div class="ai-output">'+escapeHtml(text)+'</div>';
+    block.innerHTML = '<h3>周辺知識まとめ <span class="model-tag">'+currentProviderLabel()+'</span></h3><div class="ai-output"><div class="md-body">'+renderMarkdown(text)+'</div></div>';
   }catch(e){
     block.innerHTML = '<h3>周辺知識まとめ</h3><div class="error-box">周辺知識の生成に失敗しました。'+escapeHtml(e.message||'')+'</div>';
   }
@@ -1617,10 +1657,10 @@ async function runSimilar(q){
     };
     state.generatedQuestions.push(newQ);
     saveSharedGeneratedQuestions();
-    block.innerHTML = '<h3>類題（AI生成） <span class="model-tag">'+currentProviderLabel()+'</span></h3><div class="ai-output">'+escapeHtml(parsed.text)+'\n\n'+
-      parsed.choices.map((c,i)=>(['①','②','③','④','⑤'][i])+' '+c).join('\n')+
-      (parsed.explanation ? ('\n\n解説: '+parsed.explanation) : '')+
-      '</div><div class="btn-row"><button class="btn ghost" id="goToSimilar">この類題を解く</button></div>';
+    let previewMd = parsed.text + '\n\n' +
+      parsed.choices.map((c,i)=>(['①','②','③','④','⑤'][i])+' '+c).join('\n');
+    if(parsed.explanation) previewMd += '\n\n**解説:** ' + parsed.explanation;
+    block.innerHTML = '<h3>類題（AI生成） <span class="model-tag">'+currentProviderLabel()+'</span></h3><div class="ai-output"><div class="md-body">'+renderMarkdown(previewMd)+'</div></div><div class="btn-row"><button class="btn ghost" id="goToSimilar">この類題を解く</button></div>';
     document.getElementById('goToSimilar').onclick = ()=>{
       state.activeTab='generated';
       document.getElementById('screenTitle').textContent = SCREEN_TITLES['generated'];
@@ -1640,7 +1680,11 @@ function renderChatLog(){
   state.chatHistory.forEach(m=>{
     const div = document.createElement('div');
     div.className = 'msg ' + (m.role==='user' ? 'user':'assistant');
-    div.textContent = m.content;
+    if(m.role==='user'){
+      div.textContent = m.content;
+    }else{
+      div.innerHTML = '<div class="md-body">' + renderMarkdown(m.content) + '</div>';
+    }
     log.appendChild(div);
   });
   log.scrollTop = log.scrollHeight;
@@ -1654,7 +1698,7 @@ async function sendChat(q){
   state.chatHistory.push({role:'user', content:text});
   renderChatLog();
 
-  const system = 'あなたは行政書士試験対策の専門講師です。以下の問題を前提として、受験生からの追加質問に簡潔かつ正確に答えます。範囲外の話題には、それとなく本題に戻すよう促してください。\n\n' + questionContextText(q);
+  const system = 'あなたは行政書士試験対策の専門講師です。以下の問題を前提として、受験生からの追加質問に簡潔かつ正確に答えます。範囲外の話題には、それとなく本題に戻すよう促してください。出力はMarkdown形式（重要語は**太字**、箇条書きは-）を使って読みやすく整形してください。\n\n' + questionContextText(q);
   const sendBtn = document.getElementById('chatSend');
   sendBtn.disabled = true;
   const thinking = document.createElement('div');
