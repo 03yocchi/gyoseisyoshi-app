@@ -679,23 +679,50 @@ if(!window.storage){
   window.storage = {
     async get(key, shared){
       if(cloudReady && !ALWAYS_LOCAL_KEYS.includes(key)){
-        const snap = await cloudDb.collection('gsd_kv').doc(key).get();
-        if(!snap.exists) throw new Error('key not found: ' + key);
-        return {key, value: snap.data().value, shared: !!shared};
+        try{
+          const snap = await withTimeout(
+            cloudDb.collection('gsd_kv').doc(key).get(),
+            10000, 'クラウドからの読み込み'
+          );
+          if(!snap.exists) throw new Error('key not found: ' + key);
+          return {key, value: snap.data().value, shared: !!shared};
+        }catch(e){
+          if(e && e.message && e.message.indexOf('key not found')!==-1) throw e; // genuinely not found — not a connection problem
+          console.error('クラウドからの読み込みに失敗しました。ローカルにフォールバックします。', e);
+          showSyncWarning('クラウドからの読み込みに時間がかかりすぎたため、この端末のデータで続行します。（' + (e.message||e) + '）');
+          cloudReady = false; // stop retrying the cloud for the rest of this session
+          return {key, value: localGet(key), shared: !!shared};
+        }
       }
       return {key, value: localGet(key), shared: !!shared};
     },
     async set(key, value, shared){
       if(cloudReady && !ALWAYS_LOCAL_KEYS.includes(key)){
-        await cloudDb.collection('gsd_kv').doc(key).set({value: value, updatedAt: Date.now()});
-        return {key, value, shared: !!shared};
+        try{
+          await withTimeout(
+            cloudDb.collection('gsd_kv').doc(key).set({value: value, updatedAt: Date.now()}),
+            10000, 'クラウドへの保存'
+          );
+          return {key, value, shared: !!shared};
+        }catch(e){
+          console.error('クラウドへの保存に失敗しました。この端末のみに保存します。', e);
+          showSyncWarning('クラウドへの保存に時間がかかりすぎたため、この端末のみに保存しました。（' + (e.message||e) + '）');
+          cloudReady = false;
+          localSet(key, value);
+          return {key, value, shared: !!shared};
+        }
       }
       localSet(key, value);
       return {key, value, shared: !!shared};
     },
     async delete(key, shared){
       if(cloudReady && !ALWAYS_LOCAL_KEYS.includes(key)){
-        await cloudDb.collection('gsd_kv').doc(key).delete();
+        try{
+          await withTimeout(cloudDb.collection('gsd_kv').doc(key).delete(), 10000, 'クラウドからの削除');
+        }catch(e){
+          console.error('クラウドからの削除に失敗しました', e);
+          showSyncWarning('クラウドからの削除に失敗しました。（' + (e.message||e) + '）');
+        }
       }else{
         localStorage.removeItem('gsd_' + key);
       }
