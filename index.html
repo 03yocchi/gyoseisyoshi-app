@@ -1159,6 +1159,7 @@ async function callDeepSeek(system, userText, history){
       body: JSON.stringify({
         model:'deepseek-v4-flash',
         max_tokens:32000,
+        thinking: { type: 'disabled' }, 
         messages: messages
       })
     });
