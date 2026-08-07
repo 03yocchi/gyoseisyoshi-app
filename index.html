@@ -529,6 +529,7 @@ service cloud.firestore {
 
     <div id="customFormWrap" style="display:none;">
       <div class="form-block">
+        <div class="settings-note" id="editModeBanner" style="display:none;background:var(--paper-deep);border:1px solid var(--brass);padding:8px 10px;border-radius:6px;margin-bottom:10px;"></div>
         <label>科目</label>
         <select id="cf-subject"></select>
         <label>年度・問題番号（任意。例：令和7年度／57）</label>
@@ -556,6 +557,7 @@ service cloud.firestore {
         </div>
         <div class="btn-row">
           <button class="btn brass" id="cf-save">問題を保存する</button>
+          <button class="btn ghost" id="cf-cancel-edit" style="display:none;">編集をキャンセル</button>
         </div>
         <div class="settings-status" id="cf-status"></div>
       </div>
@@ -858,6 +860,8 @@ let state = {
   queue: [],
   queueIndex: -1,
   queueLabel: '',
+  editingId: null,
+  editingOrigin: null,
   chatHistory: []     // ephemeral, resets on question change
 };
 
@@ -1159,7 +1163,7 @@ async function callDeepSeek(system, userText, history){
       body: JSON.stringify({
         model:'deepseek-v4-flash',
         max_tokens:32000,
-        thinking: { type: 'disabled' }, 
+        thinking: { type: 'disabled' },
         messages: messages
       })
     });
@@ -1283,6 +1287,7 @@ function deleteQuestion(id){
   state.generatedQuestions = state.generatedQuestions.filter(q=>q.id!==id);
   delete state.progress[id];
   if(state.currentId === id){ state.currentId = null; state.chatHistory = []; }
+  if(state.editingId === id){ exitEditMode(); }
   saveSharedCustomQuestions();
   saveSharedGeneratedQuestions();
   saveStorage();
@@ -1340,6 +1345,13 @@ function renderQuestionListInto(elId, source, emptyMsg){
     btn.onclick = ()=>selectQuestion(q.id);
     li.appendChild(btn);
     if(q.origin==='custom' || q.origin==='generated'){
+      const editBtn = document.createElement('button');
+      editBtn.className='qdelete-btn';
+      editBtn.title='この問題を編集';
+      editBtn.textContent='✎';
+      editBtn.onclick = (e)=>{ e.stopPropagation(); editQuestion(q.id); };
+      li.appendChild(editBtn);
+
       const delBtn = document.createElement('button');
       delBtn.className='qdelete-btn';
       delBtn.title='この問題を削除（みんなから見えなくなります）';
@@ -1747,6 +1759,52 @@ async function sendChat(q){
 }
 
 /* ---------- Custom question form ---------- */
+function fillCustomForm(q){
+  document.getElementById('cf-subject').value = q.subject;
+  document.getElementById('cf-year').value = q.examLabel || '';
+  document.getElementById('cf-no').value = q.no || '';
+  document.getElementById('cf-text').value = q.text;
+  const typeSel = document.getElementById('cf-type');
+  typeSel.value = q.type;
+  document.getElementById('cf-choices').style.display = q.type==='choice' ? 'block' : 'none';
+  const choiceInputs = document.querySelectorAll('.cf-choice');
+  choiceInputs.forEach((inp,i)=>{ inp.value = (q.choices && q.choices[i]) ? q.choices[i] : ''; });
+  document.getElementById('cf-correct').value = (q.correct!==null && q.correct!==undefined) ? String(q.correct) : '';
+}
+
+function clearCustomForm(){
+  document.getElementById('cf-text').value='';
+  document.getElementById('cf-year').value='';
+  document.getElementById('cf-no').value='';
+  document.querySelectorAll('.cf-choice').forEach(i=>i.value='');
+  document.getElementById('cf-correct').value='';
+}
+
+function editQuestion(id){
+  const q = findQuestion(id);
+  if(!q || (q.origin!=='custom' && q.origin!=='generated')) return;
+  goToScreen('manage');
+  state.editingId = id;
+  state.editingOrigin = q.origin;
+  fillCustomForm(q);
+  const banner = document.getElementById('editModeBanner');
+  banner.style.display = 'block';
+  banner.textContent = 'この問題を編集しています（' + (examRefLabel(q) ? examRefLabel(q)+' ・ ' : '') + q.subject + '）。保存すると上書きされます。';
+  document.getElementById('cf-save').textContent = '更新する';
+  document.getElementById('cf-cancel-edit').style.display = 'inline-block';
+  document.getElementById('cf-status').textContent = '';
+}
+
+function exitEditMode(){
+  state.editingId = null;
+  state.editingOrigin = null;
+  document.getElementById('editModeBanner').style.display = 'none';
+  document.getElementById('cf-save').textContent = '問題を保存する';
+  document.getElementById('cf-cancel-edit').style.display = 'none';
+  clearCustomForm();
+  document.getElementById('cf-status').textContent = '';
+}
+
 function initCustomForm(){
   const subjSel = document.getElementById('cf-subject');
   subjSel.innerHTML = SUBJECTS.map(s=>'<option value="'+s+'">'+s+'</option>').join('');
@@ -1756,6 +1814,8 @@ function initCustomForm(){
   typeSel.onchange = ()=>{
     choicesWrap.style.display = typeSel.value==='choice' ? 'block' : 'none';
   };
+
+  document.getElementById('cf-cancel-edit').onclick = ()=>exitEditMode();
 
   document.getElementById('cf-save').onclick = ()=>{
     const subject = subjSel.value;
@@ -1772,13 +1832,31 @@ function initCustomForm(){
     }
     const yearVal = document.getElementById('cf-year').value.trim() || null;
     const noVal = document.getElementById('cf-no').value.trim() || null;
+
+    if(state.editingId){
+      // update the existing question in place
+      const targetArray = state.editingOrigin==='generated' ? state.generatedQuestions : state.customQuestions;
+      const idx = targetArray.findIndex(q=>q.id===state.editingId);
+      if(idx===-1){
+        statusEl.className='settings-status err';
+        statusEl.textContent = '編集対象の問題が見つかりませんでした（他の人が削除した可能性があります）。';
+        return;
+      }
+      targetArray[idx] = Object.assign({}, targetArray[idx], {subject, type, text, choices, correct, no: noVal, examLabel: yearVal});
+      if(state.editingOrigin==='generated'){ saveSharedGeneratedQuestions(); } else { saveSharedCustomQuestions(); }
+      const updatedId = state.editingId;
+      exitEditMode();
+      statusEl.className='settings-status ok';
+      statusEl.textContent='更新しました。';
+      renderList();
+      selectQuestion(updatedId);
+      return;
+    }
+
     const newQ = {id: uid('cus'), subject, type, text, choices, correct, no: noVal, examLabel: yearVal, origin:'custom'};
     state.customQuestions.push(newQ);
     saveSharedCustomQuestions();
-    document.getElementById('cf-text').value='';
-    document.querySelectorAll('.cf-choice').forEach(i=>i.value='');
-    document.getElementById('cf-correct').value='';
-    document.getElementById('cf-no').value='';
+    clearCustomForm();
     statusEl.className='settings-status ok';
     statusEl.textContent='保存しました。';
     renderList();
@@ -2301,6 +2379,7 @@ function goToScreen(tab){
   document.getElementById('practiceModeToolbar').style.display = (tab==='practice') ? 'flex' : 'none';
   document.getElementById('addToolsPanel').style.display = (tab==='manage') ? 'block' : 'none';
   document.getElementById('mainSheet').style.display = (tab==='manage') ? 'none' : 'block';
+  if(tab!=='manage' && state.editingId){ exitEditMode(); }
   if(tab==='practice'){
     setPracticeMode('list');
   }else{
