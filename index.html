@@ -1157,8 +1157,9 @@ async function callDeepSeek(system, userText, history){
         'Authorization':'Bearer ' + key
       },
       body: JSON.stringify({
-        model:'deepseek-chat',
-        max_tokens:1000,
+        model:'deepseek-v4-flash',
+        max_tokens:32000,
+        thinking: { type: 'disabled' }, 
         messages: messages
       })
     });
@@ -2068,7 +2069,8 @@ function initPdfImport(){
       return;
     }
     const ansText = document.getElementById('answerExtractedText').value.trim();
-    const MAX_CHUNK = 12000;
+    const ANSWER_CHUNK = state.settings.provider === 'deepseek' ? 8000 : 3000;
+    const MAX_CHUNK = state.settings.provider === 'deepseek' ? 40000 : 12000;
     const qChunk = qText.length > MAX_CHUNK ? qText.slice(0, MAX_CHUNK) : qText;
     const truncatedNote = qText.length > MAX_CHUNK
       ? ('\n\n(テキストが長いため先頭' + MAX_CHUNK + '文字のみ使用しています。続きは範囲を変えてもう一度変換してください)')
@@ -2077,7 +2079,7 @@ function initPdfImport(){
     status.className='settings-status'; status.textContent = 'AIで変換中'+'…';
     const system = 'あなたは行政書士試験のPDF抽出テキストを、学習アプリ用の構造化データ(JSON)に変換するアシスタントです。出力は必ず有効なJSON配列のみとし、前置き・説明文・Markdownのコードフェンスは一切含めないでください。';
     const prompt = 'これは行政書士試験の過去問PDFからテキスト抽出した内容です。ページ区切りの記号や、OCR/抽出に伴う余分な空白・改行のずれが含まれることがあります。\n\n[問題文テキスト]\n' + qChunk +
-      (ansText ? ('\n\n[正解情報（あれば、問題番号と対応させて利用してください）]\n' + ansText.slice(0,3000)) : '') +
+      (ansText ? ('\n\n[正解情報（あれば、問題番号と対応させて利用してください）]\n' + ansText.slice(0,ANSWER_CHUNK)) : '') +
       '\n\n上記から読み取れる問題を可能な限りすべて抽出し、以下のJSON配列形式のみで出力してください。\n' +
       '[{"subject":"憲法|民法|行政法|商法・会社法|基礎法学|一般知識 のいずれか最も適切なもの","type":"choice か essay のどちらかの文字列のみ（choice=択一式、essay=記述式で選択肢なし）","text":"問題文本文（選択肢の番号や前後の余計な空白は除去し、自然な日本語に整えること）","choices":["choice型のみ。①②③④⑤や1.2.3.などの番号表記は取り除いた選択肢本文"],"correct":"正解情報が判明する場合のみ0始まりの番号(数値)、不明ならnull"}]' +
       truncatedNote;
