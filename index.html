@@ -929,6 +929,47 @@ function isNotFoundError(e){
   return e && typeof e.message === 'string' && e.message.indexOf('key not found') !== -1;
 }
 
+const SAMPLE_AI_CACHE_KEY = 'sample_ai_cache';
+let sampleAiCache = {};
+
+async function loadSampleAiCache(){
+  try{
+    const res = await window.storage.get(SAMPLE_AI_CACHE_KEY, true);
+    sampleAiCache = (res && res.value) ? JSON.parse(res.value) : {};
+  }catch(e){ sampleAiCache = {}; }
+}
+async function saveSampleAiCache(){
+  try{
+    await window.storage.set(SAMPLE_AI_CACHE_KEY, JSON.stringify(sampleAiCache), true);
+  }catch(e){
+    console.error('サンプル問題のAIキャッシュ保存に失敗しました', e);
+    showSyncWarning('解説の保存に失敗しました。（' + (e.message||e) + '）');
+  }
+}
+
+/* Explanations/related-knowledge are cached per question so the AI doesn't
+   need to be called again every time the same question is reopened. Custom
+   and generated questions carry the cache directly on the question object
+   (already synced via saveSharedCustomQuestions/saveSharedGeneratedQuestions);
+   built-in sample questions use a separate shared cache keyed by question id. */
+function getCachedAi(q, field){
+  if(q.origin==='custom' || q.origin==='generated') return q[field] || null;
+  return (sampleAiCache[q.id] && sampleAiCache[q.id][field]) || null;
+}
+function setCachedAi(q, field, value){
+  if(q.origin==='custom'){
+    q[field] = value;
+    saveSharedCustomQuestions();
+  }else if(q.origin==='generated'){
+    q[field] = value;
+    saveSharedGeneratedQuestions();
+  }else{
+    if(!sampleAiCache[q.id]) sampleAiCache[q.id] = {};
+    sampleAiCache[q.id][field] = value;
+    saveSampleAiCache();
+  }
+}
+
 async function loadSharedQuestions(){
   try{
     const res = await window.storage.get(SHARED_CUSTOM_KEY, true);
@@ -1030,6 +1071,7 @@ async function attemptLogin(name, password){
   await setLastProfile(name);
   await saveStorage(); // persist (writes the password hash for new/legacy profiles)
   await loadSharedQuestions(); // pick up whatever custom/generated questions the group has added
+  await loadSampleAiCache();
   return {ok:true};
 }
 
@@ -1654,25 +1696,47 @@ function appendAiBlock(title, id){
   return block;
 }
 
-async function runExplain(q){
+async function runExplain(q, force){
+  const cached = !force && getCachedAi(q, 'cachedExplanation');
+  if(cached){
+    const block = appendAiBlock('AI解説 <span class="model-tag">保存済み</span>', 'load-explain-cached');
+    block.innerHTML = '<h3>AI解説 <span class="model-tag">保存済み</span></h3><div class="ai-output"><div class="md-body">'+renderMarkdown(cached)+'</div></div>'+
+      '<div class="btn-row"><button class="btn ghost" id="regenExplainBtn">🔄 AIに作り直してもらう</button></div>';
+    document.getElementById('regenExplainBtn').onclick = ()=>{ block.remove(); runExplain(q, true); };
+    return;
+  }
   const block = appendAiBlock('AI解説 <span class="model-tag">'+currentProviderLabel()+'</span>', 'load-explain');
   const system = 'あなたは行政書士試験対策に精通した専門講師です。受験生に向けて、正確かつ簡潔に解説します。断定できない場合は断定を避け、確認を促してください。出力はMarkdown形式（見出しは##以下、重要語は**太字**、箇条書きは-）を使って読みやすく整形してください。';
   const prompt = questionContextText(q) + '\n\n上記の問題について、(1)結論(正解の要点)、(2)正解の根拠となる条文・判例・法理論、(3)誤りの選択肢がなぜ誤りか、を初学者にもわかる言葉で、350〜500字程度で解説してください。箇条書きでも構いません。';
   try{
     const text = await callAI(system, prompt);
-    block.innerHTML = '<h3>AI解説 <span class="model-tag">'+currentProviderLabel()+'</span></h3><div class="ai-output"><div class="md-body">'+renderMarkdown(text)+'</div></div>';
+    setCachedAi(q, 'cachedExplanation', text);
+    block.innerHTML = '<h3>AI解説 <span class="model-tag">'+currentProviderLabel()+'</span></h3><div class="ai-output"><div class="md-body">'+renderMarkdown(text)+'</div></div>'+
+      '<div class="btn-row"><button class="btn ghost" id="regenExplainBtn2">🔄 AIに作り直してもらう</button></div>';
+    document.getElementById('regenExplainBtn2').onclick = ()=>{ block.remove(); runExplain(q, true); };
   }catch(e){
     block.innerHTML = '<h3>AI解説</h3><div class="error-box">解説を取得できませんでした。'+escapeHtml(e.message||'')+'</div>';
   }
 }
 
-async function runRelated(q){
+async function runRelated(q, force){
+  const cached = !force && getCachedAi(q, 'cachedRelated');
+  if(cached){
+    const block = appendAiBlock('周辺知識まとめ <span class="model-tag">保存済み</span>', 'load-related-cached');
+    block.innerHTML = '<h3>周辺知識まとめ <span class="model-tag">保存済み</span></h3><div class="ai-output"><div class="md-body">'+renderMarkdown(cached)+'</div></div>'+
+      '<div class="btn-row"><button class="btn ghost" id="regenRelatedBtn">🔄 AIに作り直してもらう</button></div>';
+    document.getElementById('regenRelatedBtn').onclick = ()=>{ block.remove(); runRelated(q, true); };
+    return;
+  }
   const block = appendAiBlock('周辺知識まとめ <span class="model-tag">'+currentProviderLabel()+'</span>', 'load-related');
   const system = 'あなたは行政書士試験対策に精通した専門講師です。受験生が周辺知識を補強できるよう、関連情報を整理して提示します。出力はMarkdown形式（見出しは##以下、重要語は**太字**、箇条書きは-）を使って読みやすく整形してください。';
   const prompt = questionContextText(q) + '\n\n上記の問題に関連する、(1)関連条文、(2)関連判例、(3)混同しやすい類似制度や紛らわしい論点、(4)覚えておくべき数字・要件、を箇条書きで整理してください。400字程度でコンパクトにまとめてください。';
   try{
     const text = await callAI(system, prompt);
-    block.innerHTML = '<h3>周辺知識まとめ <span class="model-tag">'+currentProviderLabel()+'</span></h3><div class="ai-output"><div class="md-body">'+renderMarkdown(text)+'</div></div>';
+    setCachedAi(q, 'cachedRelated', text);
+    block.innerHTML = '<h3>周辺知識まとめ <span class="model-tag">'+currentProviderLabel()+'</span></h3><div class="ai-output"><div class="md-body">'+renderMarkdown(text)+'</div></div>'+
+      '<div class="btn-row"><button class="btn ghost" id="regenRelatedBtn2">🔄 AIに作り直してもらう</button></div>';
+    document.getElementById('regenRelatedBtn2').onclick = ()=>{ block.remove(); runRelated(q, true); };
   }catch(e){
     block.innerHTML = '<h3>周辺知識まとめ</h3><div class="error-box">周辺知識の生成に失敗しました。'+escapeHtml(e.message||'')+'</div>';
   }
