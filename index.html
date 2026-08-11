@@ -862,6 +862,7 @@ let state = {
   queueLabel: '',
   editingId: null,
   editingOrigin: null,
+  currentAttempt: {answered:false, correct:null, userChoice:null, userEssay:''}, // resets every time a question is (re)opened — not persisted
   chatHistory: []     // ephemeral, resets on question change
 };
 
@@ -1461,6 +1462,7 @@ function renderStats(){
 function selectQuestion(id){
   state.currentId = id;
   state.chatHistory = [];
+  state.currentAttempt = {answered:false, correct:null, userChoice:null, userEssay:''};
   renderList();
   renderMain();
 }
@@ -1579,7 +1581,7 @@ function renderMain(){
     if(state.queue.length>0) wireQueueBar();
     return;
   }
-  const prog = state.progress[q.id] || {answered:false, correct:null, userChoice:null};
+  const att = state.currentAttempt;
 
   let html = queueBarHtml;
   const examTag = examRefLabel(q);
@@ -1590,25 +1592,25 @@ function renderMain(){
     html += '<ul class="choices" id="choicesList">';
     q.choices.forEach((c,i)=>{
       let cls='choice';
-      if(prog.answered && q.correct!==null && q.correct!==undefined){
+      if(att.answered && q.correct!==null && q.correct!==undefined){
         if(i===q.correct) cls+=' correct-mark';
-        else if(i===prog.userChoice) cls+=' wrong-mark';
-      } else if(prog.userChoice===i){
+        else if(i===att.userChoice) cls+=' wrong-mark';
+      } else if(att.userChoice===i){
         cls+=' picked';
       }
       html += '<li class="'+cls+'" data-idx="'+i+'"><span class="num">'+(['①','②','③','④','⑤'][i])+'</span><span>'+escapeHtml(c)+'</span></li>';
     });
     html += '</ul>';
     html += '<div class="btn-row">';
-    html += '<button class="btn brass" id="submitAnswerBtn" '+(prog.answered?'disabled':'')+'>解答する</button>';
+    html += '<button class="btn brass" id="submitAnswerBtn" '+(att.answered?'disabled':'')+'>解答する</button>';
     html += '</div>';
   } else {
-    html += '<div class="essay-box"><textarea id="essayAnswer" placeholder="自分なりの答案をメモしてから解説を見ると定着しやすいです（任意）">'+ (prog.userEssay? escapeHtml(prog.userEssay):'') +'</textarea></div>';
+    html += '<div class="essay-box"><textarea id="essayAnswer" placeholder="自分なりの答案をメモしてから解説を見ると定着しやすいです（任意）">'+ (att.userEssay? escapeHtml(att.userEssay):'') +'</textarea></div>';
   }
 
-  if(prog.answered && q.type==='choice'){
+  if(att.answered && q.type==='choice'){
     if(q.correct!==null && q.correct!==undefined){
-      const ok = prog.correct;
+      const ok = att.correct;
       html += '<div class="result-row">';
       html += '<div class="hanko '+(ok?'':'wrong')+'">'+(ok?'正解':'不正解')+'</div>';
       html += '<div class="result-text '+(ok?'ok':'ng')+'">'+(ok? '<b>正解！</b> よくできました。':'<b>不正解</b>。下のAI解説で確認しましょう。')+'</div>';
@@ -1635,19 +1637,21 @@ function renderMain(){
   if(q.type==='choice'){
     sheet.querySelectorAll('#choicesList .choice').forEach(el=>{
       el.onclick = ()=>{
-        if(state.progress[q.id] && state.progress[q.id].answered) return;
+        if(state.currentAttempt.answered) return;
         const idx = parseInt(el.getAttribute('data-idx'),10);
-        state.progress[q.id] = Object.assign({}, state.progress[q.id], {answered:false, userChoice:idx, correct:null});
+        state.currentAttempt.userChoice = idx;
         renderMain();
       };
     });
     const submitBtn = document.getElementById('submitAnswerBtn');
     if(submitBtn){
       submitBtn.onclick = ()=>{
-        const p = state.progress[q.id] || {};
-        if(p.userChoice===undefined || p.userChoice===null){ return; }
-        const isCorrect = q.correct!==null ? (p.userChoice===q.correct) : null;
-        state.progress[q.id] = Object.assign({}, p, {answered:true, correct:isCorrect});
+        if(state.currentAttempt.userChoice===undefined || state.currentAttempt.userChoice===null){ return; }
+        const isCorrect = q.correct!==null ? (state.currentAttempt.userChoice===q.correct) : null;
+        state.currentAttempt.answered = true;
+        state.currentAttempt.correct = isCorrect;
+        // record the result for stats/badges only — the on-screen state above resets fresh every time this question is reopened
+        state.progress[q.id] = {answered:true, correct:isCorrect, userChoice: state.currentAttempt.userChoice};
         saveStorage();
         renderList();
         renderMain();
@@ -1658,8 +1662,7 @@ function renderMain(){
     const essayEl = document.getElementById('essayAnswer');
     if(essayEl){
       essayEl.onblur = ()=>{
-        state.progress[q.id] = Object.assign({}, state.progress[q.id], {userEssay: essayEl.value});
-        saveStorage();
+        state.currentAttempt.userEssay = essayEl.value;
       };
     }
   }
