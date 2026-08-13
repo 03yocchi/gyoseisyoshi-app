@@ -665,6 +665,13 @@ async function connectCloud(configObj){
   }
   await firebase.auth().signInAnonymously();
   cloudDb = firebase.firestore();
+  try{
+    // Some networks/extensions (ad-blockers, strict firewalls) silently block
+    // Firestore's default streaming connection, which makes reads hang forever
+    // even though one-off writes go through. Forcing long-polling avoids that.
+    cloudDb.settings({ experimentalAutoDetectLongPolling: true, useFetchStreams: false });
+  }catch(e){ /* settings() must be called before any other Firestore call — if we're
+                too late (e.g. reconnecting), just proceed with defaults */ }
   cloudReady = true;
 }
 
