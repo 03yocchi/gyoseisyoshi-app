@@ -659,20 +659,37 @@ const ALWAYS_LOCAL_KEYS = ['global_settings', 'last_profile', 'firebase_config']
 let cloudDb = null;
 let cloudReady = false;
 
+let firestoreSettingsApplied = false;
+let connectingPromise = null;
+
 async function connectCloud(configObj){
-  if(!firebase.apps || firebase.apps.length===0){
-    firebase.initializeApp(configObj);
-  }
-  await firebase.auth().signInAnonymously();
-  cloudDb = firebase.firestore();
+  if(cloudReady && cloudDb) return; // already connected — don't reconfigure a live connection
+  if(connectingPromise) return connectingPromise; // a connection attempt is already in flight — join it instead of starting a second one
+  connectingPromise = (async ()=>{
+    if(!firebase.apps || firebase.apps.length===0){
+      firebase.initializeApp(configObj);
+    }
+    await firebase.auth().signInAnonymously();
+    if(!cloudDb){
+      cloudDb = firebase.firestore();
+    }
+    if(!firestoreSettingsApplied){
+      try{
+        // Some networks/extensions (ad-blockers, strict firewalls) silently block
+        // Firestore's default streaming connection, which makes reads hang forever
+        // even though one-off writes go through. Forcing long-polling avoids that.
+        // This must only ever be called once, before any other Firestore call.
+        cloudDb.settings({ experimentalAutoDetectLongPolling: true, useFetchStreams: false });
+        firestoreSettingsApplied = true;
+      }catch(e){ /* too late to apply — proceed with whatever's already active */ }
+    }
+    cloudReady = true;
+  })();
   try{
-    // Some networks/extensions (ad-blockers, strict firewalls) silently block
-    // Firestore's default streaming connection, which makes reads hang forever
-    // even though one-off writes go through. Forcing long-polling avoids that.
-    cloudDb.settings({ experimentalAutoDetectLongPolling: true, useFetchStreams: false });
-  }catch(e){ /* settings() must be called before any other Firestore call — if we're
-                too late (e.g. reconnecting), just proceed with defaults */ }
-  cloudReady = true;
+    await connectingPromise;
+  }finally{
+    connectingPromise = null;
+  }
 }
 
 function localGet(key){
